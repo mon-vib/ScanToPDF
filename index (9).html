@@ -1,0 +1,822 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Scan to PDF (Offline)</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background: #0f172a; color: #e2e8f0; }
+    .container { max-width: 1200px; margin: 0 auto; padding: 16px; }
+    h1 { margin: 0 0 12px; font-size: 1.4rem; }
+    .panel { background: #111827; border: 1px solid #334155; border-radius: 12px; padding: 12px; margin-bottom: 12px; }
+    .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .row-space { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+    .field { display: flex; flex-direction: column; gap: 4px; min-width: 145px; }
+    .field label { font-size: 12px; color: #94a3b8; }
+    select, input[type="range"], input[type="text"], button, input[type="file"]::file-selector-button { border: 1px solid #475569; background: #1e293b; color: #e2e8f0; border-radius: 8px; padding: 8px 12px; cursor: pointer; font-size: 14px; }
+    input[type="range"] { padding: 0; }
+    button:hover, input[type="file"]::file-selector-button:hover, select:hover { background: #334155; }
+    .danger { border-color: #ef4444; color: #fecaca; }
+    .ok { border-color: #22c55e; color: #bbf7d0; }
+    #pages { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+    .card { background: #0b1220; border: 1px solid #334155; border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; min-height: 240px; }
+    .thumb-wrap { background: #020617; display: grid; place-items: center; height: 160px; }
+    .thumb-wrap canvas { max-width: 100%; max-height: 100%; }
+    .meta { padding: 8px; font-size: 12px; color: #94a3b8; }
+    .actions { display: flex; gap: 6px; padding: 0 8px 8px; flex-wrap: wrap; }
+    video { width: min(100%, 500px); border-radius: 8px; border: 1px solid #334155; background: #000; }
+    .hidden { display: none !important; }
+    .muted { color: #94a3b8; font-size: 13px; }
+    #editorWrap { display: grid; grid-template-columns: minmax(250px, 1fr) minmax(300px, 440px); gap: 14px; }
+    #previewCanvas { width: 100%; max-height: 420px; object-fit: contain; border: 1px dashed #475569; border-radius: 8px; background: #020617; touch-action: none; cursor: crosshair; }
+    .slider-row { display: grid; grid-template-columns: 100px 1fr 50px; gap: 8px; align-items: center; margin-bottom: 8px; }
+    .slider-row output { text-align: right; color: #93c5fd; font-size: 12px; }
+    .hint { margin: 8px 0; font-size: 12px; color: #93c5fd; border: 1px solid #334155; border-radius: 8px; padding: 8px; background: #0b1220; }
+    @media (max-width: 900px) { #editorWrap { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="row-space" style="margin-bottom:12px; align-items:center;">
+      <h1 style="margin:0;">📄 Scan to PDF</h1>
+      <a href="compress.html" style="text-decoration:none;"><button type="button">Nén PDF</button></a>
+    </div>
+
+    <div class="panel">
+      <div class="row">
+        <input id="uploadInput" type="file" accept="image/*" multiple />
+        <button id="openCamBtn">Mở camera</button>
+        <button id="captureBtn" class="hidden">Chụp ảnh</button>
+        <button id="closeCamBtn" class="hidden danger">Tắt camera</button>
+      </div>
+      <div id="cameraBox" class="hidden" style="margin-top:10px;"><video id="video" autoplay playsinline></video></div>
+      <p class="muted">Bạn có thể tải nhiều ảnh lên hoặc chụp từng trang bằng camera.</p>
+    </div>
+
+    <div class="panel">
+      <div class="row-space" style="margin-bottom:8px;">
+        <div class="field">
+          <label for="filenameInput">Tên file xuất (Eg: scan-bangdiem)</label>
+          <input id="filenameInput" type="text" value="scan-document" placeholder="Ví dụ: ho-so-2026" />
+        </div>
+        <button id="exportPdfBtn" class="ok">Xuất PDF</button>
+        <button id="exportJpgBtn">Xuất JPG</button>
+        <button id="exportPngBtn">Xuất PNG</button>
+        <div class="field">
+          <label for="paperSizeSelect">Khổ giấy PDF</label>
+          <select id="paperSizeSelect">
+            <option value="A4">A4 (210 × 297 mm)</option>
+            <option value="A5">A5 (148 × 210 mm)</option>
+            <option value="LETTER">Letter (8.5 × 11 in)</option>
+            <option value="LEGAL">Legal (8.5 × 14 in)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="orientationSelect">Hướng trang PDF</label>
+          <select id="orientationSelect"><option value="portrait">Dọc (Portrait)</option><option value="landscape">Ngang (Landscape)</option></select>
+        </div>
+      </div>
+
+      <div id="editorWrap" class="hidden">
+        <div>
+          <canvas id="previewCanvas"></canvas>
+          <p id="selectedInfo" class="muted" style="margin-top:6px;"></p>
+        </div>
+        <div>
+          <h3 style="margin:0 0 10px;">Chỉnh ảnh trang đang chọn</h3>
+          <p class="hint">Tối ưu hiệu năng: ảnh lớn sẽ được tự động giảm kích thước xử lý (max 2200px cạnh dài) để kéo cắt mượt hơn.</p>
+          <div class="slider-row"><label for="brightness">Làm sáng (%)</label><input id="brightness" type="range" min="40" max="180" value="100" /><output id="brightnessVal">100%</output></div>
+          <div class="slider-row"><label for="contrast">Tương phản (%)</label><input id="contrast" type="range" min="40" max="220" value="100" /><output id="contrastVal">100%</output></div>
+          <div class="field" style="margin-bottom:10px;"><label for="filterSelect">Bộ lọc ảnh</label><select id="filterSelect"><option value="none">Mặc định</option><option value="grayscale">Đen trắng xám</option><option value="bw">Tài liệu (đen trắng)</option><option value="sepia">Sepia</option><option value="invert">Đảo màu</option></select></div>
+          <label class="row" style="font-size:13px; margin-bottom:10px;"><input id="applyAllToggle" type="checkbox" /> Áp dụng làm sáng/tương phản/bộ lọc cho toàn bộ ảnh</label>
+          <label class="row" style="font-size:13px; margin-bottom:10px;"><input id="perspectiveToggle" type="checkbox" checked /> Làm phẳng phối cảnh / vuông vức giấy</label>
+          <div class="row"><button id="autoDetectBtn">Tự bắt góc</button><button id="resetPolyBtn">Reset vùng cắt</button><button id="resetEditBtn">Đặt lại chỉnh sửa</button><button id="clearAllBtn" class="danger">Xóa toàn bộ ảnh</button></div>
+        </div>
+      </div>
+
+      <div id="pages"></div>
+      <p id="emptyHint" class="muted">Chưa có trang nào.</p>
+    </div>
+  </div>
+
+  <script>
+    const MAX_WORK_DIM = 2200;
+
+    const uploadInput = document.getElementById('uploadInput');
+    const openCamBtn = document.getElementById('openCamBtn');
+    const captureBtn = document.getElementById('captureBtn');
+    const closeCamBtn = document.getElementById('closeCamBtn');
+    const cameraBox = document.getElementById('cameraBox');
+    const video = document.getElementById('video');
+    const pagesEl = document.getElementById('pages');
+    const emptyHint = document.getElementById('emptyHint');
+    const exportPdfBtn = document.getElementById('exportPdfBtn');
+    const exportJpgBtn = document.getElementById('exportJpgBtn');
+    const exportPngBtn = document.getElementById('exportPngBtn');
+    const clearAllBtn = document.getElementById('clearAllBtn');
+    const filenameInput = document.getElementById('filenameInput');
+    const paperSizeSelect = document.getElementById('paperSizeSelect');
+    const orientationSelect = document.getElementById('orientationSelect');
+    const editorWrap = document.getElementById('editorWrap');
+    const previewCanvas = document.getElementById('previewCanvas');
+    const selectedInfo = document.getElementById('selectedInfo');
+    const resetEditBtn = document.getElementById('resetEditBtn');
+    const resetPolyBtn = document.getElementById('resetPolyBtn');
+    const autoDetectBtn = document.getElementById('autoDetectBtn');
+
+    const controls = {
+      brightness: document.getElementById('brightness'),
+      contrast: document.getElementById('contrast'),
+      filter: document.getElementById('filterSelect'),
+      applyAll: document.getElementById('applyAllToggle'),
+      perspective: document.getElementById('perspectiveToggle'),
+    };
+    const outputs = { brightness: document.getElementById('brightnessVal'), contrast: document.getElementById('contrastVal') };
+
+    const previewState = { width: 1, height: 1, activeVertex: -1, isDragging: false, rafId: 0, needThumbRefresh: false };
+    let stream = null;
+    let selectedIndex = -1;
+    const pages = [];
+
+    const paperSizesMm = { A4: { w: 210, h: 297 }, A5: { w: 148, h: 210 }, LETTER: { w: 215.9, h: 279.4 }, LEGAL: { w: 215.9, h: 355.6 } };
+
+    function mmToPt(mm) { return mm * 72 / 25.4; }
+    function clamp(v, min, max) { return Math.min(max, Math.max(min, v)); }
+    function distance(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
+
+    function defaultPolygon() { return [{ x: 0.05, y: 0.05 }, { x: 0.95, y: 0.05 }, { x: 0.95, y: 0.95 }, { x: 0.05, y: 0.95 }]; }
+    function defaultEdits() { return { polygon: defaultPolygon(), brightness: 100, contrast: 100, filter: 'none', perspective: true }; }
+    function createCache() { return { displayKey: '', displayCanvas: null, processedKey: '', processedCanvas: null }; }
+    function invalidateCache(page, displayToo = false) {
+      page.cache.processedKey = '';
+      page.cache.processedCanvas = null;
+      if (displayToo) { page.cache.displayKey = ''; page.cache.displayCanvas = null; }
+    }
+
+    function downscaleCanvas(source, maxDim = MAX_WORK_DIM) {
+      const maxSide = Math.max(source.width, source.height);
+      if (maxSide <= maxDim) return source;
+      const scale = maxDim / maxSide;
+      const out = document.createElement('canvas');
+      out.width = Math.max(1, Math.round(source.width * scale));
+      out.height = Math.max(1, Math.round(source.height * scale));
+      out.getContext('2d').drawImage(source, 0, 0, out.width, out.height);
+      return out;
+    }
+
+    function detectDocumentPolygon(sourceCanvas) {
+      const maxAnalyzeDim = 900;
+      const analysis = downscaleCanvas(sourceCanvas, maxAnalyzeDim);
+      const w = analysis.width;
+      const h = analysis.height;
+      if (w < 80 || h < 80) return defaultPolygon();
+
+      const ctx = analysis.getContext('2d', { willReadFrequently: true });
+      const img = ctx.getImageData(0, 0, w, h);
+      const data = img.data;
+      const gray = new Float32Array(w * h);
+      for (let i = 0, p = 0; i < data.length; i += 4, p++) gray[p] = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+
+      function getCornersFromPoints(points) {
+        if (!points.length) return null;
+        let tl = points[0], tr = points[0], br = points[0], bl = points[0];
+        for (const p of points) {
+          if (p.x + p.y < tl.x + tl.y) tl = p;
+          if (p.x - p.y > tr.x - tr.y) tr = p;
+          if (p.x + p.y > br.x + br.y) br = p;
+          if (p.x - p.y < bl.x - bl.y) bl = p;
+        }
+        const ordered = [tl, tr, br, bl];
+        const area = Math.abs(
+          ordered[0].x * ordered[1].y - ordered[1].x * ordered[0].y +
+          ordered[1].x * ordered[2].y - ordered[2].x * ordered[1].y +
+          ordered[2].x * ordered[3].y - ordered[3].x * ordered[2].y +
+          ordered[3].x * ordered[0].y - ordered[0].x * ordered[3].y
+        ) / 2;
+        return { ordered, area };
+      }
+
+      function detectByBackgroundContrast() {
+        const borderSamples = [];
+        const sampleStep = Math.max(1, Math.round(Math.min(w, h) / 120));
+        for (let x = 0; x < w; x += sampleStep) {
+          borderSamples.push([data[(x * 4)], data[(x * 4) + 1], data[(x * 4) + 2]]);
+          const b = ((h - 1) * w + x) * 4;
+          borderSamples.push([data[b], data[b + 1], data[b + 2]]);
+        }
+        for (let y = 0; y < h; y += sampleStep) {
+          const l = (y * w) * 4;
+          const r = (y * w + (w - 1)) * 4;
+          borderSamples.push([data[l], data[l + 1], data[l + 2]]);
+          borderSamples.push([data[r], data[r + 1], data[r + 2]]);
+        }
+        if (!borderSamples.length) return null;
+
+        const mean = [0, 0, 0];
+        for (const c of borderSamples) { mean[0] += c[0]; mean[1] += c[1]; mean[2] += c[2]; }
+        mean[0] /= borderSamples.length; mean[1] /= borderSamples.length; mean[2] /= borderSamples.length;
+
+        const distances = [];
+        for (const c of borderSamples) distances.push(Math.hypot(c[0] - mean[0], c[1] - mean[1], c[2] - mean[2]));
+        distances.sort((a, b) => a - b);
+        const spread = distances[Math.floor(distances.length * 0.9)] || 0;
+        const threshold = Math.max(22, spread * 2.4);
+
+        const fg = [];
+        const margin = Math.round(Math.min(w, h) * 0.02);
+        for (let y = margin; y < h - margin; y++) {
+          for (let x = margin; x < w - margin; x++) {
+            const i = (y * w + x) * 4;
+            const dr = data[i] - mean[0];
+            const dg = data[i + 1] - mean[1];
+            const db = data[i + 2] - mean[2];
+            if (Math.hypot(dr, dg, db) >= threshold) fg.push({ x, y });
+          }
+        }
+
+        if (fg.length < w * h * 0.03) return null;
+        const corners = getCornersFromPoints(fg);
+        if (!corners) return null;
+        if (corners.area < w * h * 0.1) return null;
+        return corners.ordered;
+      }
+
+      const blur = new Float32Array(gray.length);
+      const kernel = [1, 2, 1];
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          let sum = 0, weight = 0;
+          for (let k = -1; k <= 1; k++) {
+            const xx = clamp(x + k, 0, w - 1);
+            const kv = kernel[k + 1];
+            sum += gray[y * w + xx] * kv;
+            weight += kv;
+          }
+          blur[y * w + x] = sum / weight;
+        }
+      }
+
+      const blur2 = new Float32Array(gray.length);
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          let sum = 0, weight = 0;
+          for (let k = -1; k <= 1; k++) {
+            const yy = clamp(y + k, 0, h - 1);
+            const kv = kernel[k + 1];
+            sum += blur[yy * w + x] * kv;
+            weight += kv;
+          }
+          blur2[y * w + x] = sum / weight;
+        }
+      }
+
+      const mags = [];
+      const edgePoints = [];
+      for (let y = 1; y < h - 1; y++) {
+        for (let x = 1; x < w - 1; x++) {
+          const i = y * w + x;
+          const gx = -blur2[i - w - 1] - 2 * blur2[i - 1] - blur2[i + w - 1] + blur2[i - w + 1] + 2 * blur2[i + 1] + blur2[i + w + 1];
+          const gy = -blur2[i - w - 1] - 2 * blur2[i - w] - blur2[i - w + 1] + blur2[i + w - 1] + 2 * blur2[i + w] + blur2[i + w + 1];
+          const mag = Math.hypot(gx, gy);
+          mags.push(mag);
+        }
+      }
+
+      if (!mags.length) return defaultPolygon();
+      mags.sort((a, b) => a - b);
+      const percentile = mags[Math.floor(mags.length * 0.86)] || 0;
+      const edgeThreshold = Math.max(18, percentile);
+      const margin = Math.round(Math.min(w, h) * 0.02);
+      for (let y = 1; y < h - 1; y++) {
+        for (let x = 1; x < w - 1; x++) {
+          if (x < margin || x > w - margin || y < margin || y > h - margin) continue;
+          const i = y * w + x;
+          const gx = -blur2[i - w - 1] - 2 * blur2[i - 1] - blur2[i + w - 1] + blur2[i - w + 1] + 2 * blur2[i + 1] + blur2[i + w + 1];
+          const gy = -blur2[i - w - 1] - 2 * blur2[i - w] - blur2[i - w + 1] + blur2[i + w - 1] + 2 * blur2[i + w] + blur2[i + w + 1];
+          if (Math.hypot(gx, gy) >= edgeThreshold) edgePoints.push({ x, y });
+        }
+      }
+
+      const colorQuad = detectByBackgroundContrast();
+      if (colorQuad) return colorQuad.map((p) => ({ x: clamp(p.x / w, 0, 1), y: clamp(p.y / h, 0, 1) }));
+
+      if (edgePoints.length < 120) return defaultPolygon();
+      const centerX = w / 2;
+      const centerY = h / 2;
+      edgePoints.sort((a, b) => {
+        const da = Math.hypot(a.x - centerX, a.y - centerY);
+        const db = Math.hypot(b.x - centerX, b.y - centerY);
+        return db - da;
+      });
+      const topPoints = edgePoints.slice(0, Math.max(200, Math.floor(edgePoints.length * 0.35)));
+      const corners = getCornersFromPoints(topPoints);
+      if (!corners) return defaultPolygon();
+      const { ordered, area } = corners;
+      const minArea = w * h * 0.12;
+      if (!Number.isFinite(area) || area < minArea) return defaultPolygon();
+
+      return ordered.map((p) => ({ x: clamp(p.x / w, 0, 1), y: clamp(p.y / h, 0, 1) }));
+    }
+
+    function downloadBlob(blob, filename) { const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = filename; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1500); }
+    function getBaseFilename() {
+      const raw = (filenameInput.value || '').trim();
+      const cleaned = raw.replace(/[<>:\"/\\\\|?*\\x00-\\x1F]/g, '-').replace(/\\s+/g, '-').replace(/-+/g, '-').replace(/^[-.]+|[-.]+$/g, '');
+      return cleaned || 'scan-document';
+    }
+    function dataUrlToBytes(dataUrl) { const b64 = dataUrl.split(',')[1]; const bin = atob(b64); const bytes = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i); return bytes; }
+    function asciiBytes(str) { return new TextEncoder().encode(str); }
+    function concatBytes(parts) { const len = parts.reduce((n, p) => n + p.length, 0); const out = new Uint8Array(len); let off = 0; for (const p of parts) { out.set(p, off); off += p.length; } return out; }
+
+    function getPdfDimensionsPt() {
+      const size = paperSizesMm[paperSizeSelect.value] || paperSizesMm.A4;
+      let w = mmToPt(size.w), h = mmToPt(size.h);
+      if (orientationSelect.value === 'landscape') [w, h] = [h, w];
+      return { w, h };
+    }
+
+    function createPdfFromCanvases(canvases) {
+      const { w: pageW, h: pageH } = getPdfDimensionsPt();
+      const objects = new Map();
+      let nextId = 3;
+      const pageRefs = [];
+      canvases.forEach((canvas) => {
+        const imgBytes = dataUrlToBytes(canvas.toDataURL('image/jpeg', 0.92));
+        const iw = canvas.width, ih = canvas.height;
+        const scale = Math.min(pageW / iw, pageH / ih);
+        const drawW = iw * scale, drawH = ih * scale;
+        const x = (pageW - drawW) / 2, y = (pageH - drawH) / 2;
+        const imgId = nextId++, contentId = nextId++, pageId = nextId++;
+        objects.set(imgId, concatBytes([asciiBytes(`<< /Type /XObject /Subtype /Image /Width ${iw} /Height ${ih} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${imgBytes.length} >>\nstream\n`), imgBytes, asciiBytes('\nendstream')]));
+        const contentStream = `q\n${drawW.toFixed(2)} 0 0 ${drawH.toFixed(2)} ${x.toFixed(2)} ${y.toFixed(2)} cm\n/Im0 Do\nQ`;
+        objects.set(contentId, asciiBytes(`<< /Length ${contentStream.length} >>\nstream\n${contentStream}\nendstream`));
+        objects.set(pageId, asciiBytes(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageW.toFixed(2)} ${pageH.toFixed(2)}] /Resources << /XObject << /Im0 ${imgId} 0 R >> >> /Contents ${contentId} 0 R >>`));
+        pageRefs.push(`${pageId} 0 R`);
+      });
+      objects.set(2, asciiBytes(`<< /Type /Pages /Kids [${pageRefs.join(' ')}] /Count ${pageRefs.length} >>`));
+      objects.set(1, asciiBytes('<< /Type /Catalog /Pages 2 0 R >>'));
+      const ids = Array.from(objects.keys()).sort((a, b) => a - b);
+      const parts = [asciiBytes('%PDF-1.4\n%\xE2\xE3\xCF\xD3\n')];
+      const offsets = [0];
+      let pos = parts[0].length;
+      ids.forEach((id) => { offsets[id] = pos; const head = asciiBytes(`${id} 0 obj\n`); const body = objects.get(id); const tail = asciiBytes('\nendobj\n'); parts.push(head, body, tail); pos += head.length + body.length + tail.length; });
+      const xrefStart = pos;
+      const size = ids[ids.length - 1] + 1;
+      let xref = `xref\n0 ${size}\n0000000000 65535 f \n`;
+      for (let i = 1; i < size; i++) xref += `${String(offsets[i] || 0).padStart(10, '0')} 00000 n \n`;
+      parts.push(asciiBytes(xref), asciiBytes(`trailer\n<< /Size ${size} /Root 1 0 R >>\nstartxref\n${xrefStart}\n%%EOF`));
+      return new Blob([concatBytes(parts)], { type: 'application/pdf' });
+    }
+
+    function applyFilterPixels(imageData, filter) {
+      const d = imageData.data;
+      if (filter === 'none') return;
+      for (let i = 0; i < d.length; i += 4) {
+        const r = d[i], g = d[i + 1], b = d[i + 2];
+        if (filter === 'grayscale') {
+          const v = 0.299 * r + 0.587 * g + 0.114 * b; d[i] = d[i + 1] = d[i + 2] = v;
+        } else if (filter === 'bw') {
+          const v = 0.299 * r + 0.587 * g + 0.114 * b; const out = v > 150 ? 255 : 0; d[i] = d[i + 1] = d[i + 2] = out;
+        } else if (filter === 'sepia') {
+          d[i] = Math.min(255, 0.393 * r + 0.769 * g + 0.189 * b); d[i + 1] = Math.min(255, 0.349 * r + 0.686 * g + 0.168 * b); d[i + 2] = Math.min(255, 0.272 * r + 0.534 * g + 0.131 * b);
+        } else if (filter === 'invert') {
+          d[i] = 255 - r; d[i + 1] = 255 - g; d[i + 2] = 255 - b;
+        }
+      }
+    }
+
+    function buildDisplayKey(page) {
+      const e = page.edits;
+      return `${page.originalCanvas.width}x${page.originalCanvas.height}|${e.brightness}|${e.contrast}|${e.filter}`;
+    }
+
+    function getDisplayCanvas(page) {
+      const key = buildDisplayKey(page);
+      if (page.cache.displayCanvas && page.cache.displayKey === key) return page.cache.displayCanvas;
+
+      const src = page.originalCanvas;
+      const out = document.createElement('canvas');
+      out.width = src.width;
+      out.height = src.height;
+      const ctx = out.getContext('2d');
+      ctx.filter = `brightness(${page.edits.brightness / 100}) contrast(${page.edits.contrast / 100})`;
+      ctx.drawImage(src, 0, 0);
+      ctx.filter = 'none';
+      if (page.edits.filter !== 'none') {
+        const imgData = ctx.getImageData(0, 0, out.width, out.height);
+        applyFilterPixels(imgData, page.edits.filter);
+        ctx.putImageData(imgData, 0, 0);
+      }
+
+      page.cache.displayKey = key;
+      page.cache.displayCanvas = out;
+      return out;
+    }
+
+    function getPolygonPixels(polygon, width, height) { return polygon.map((p) => ({ x: clamp(p.x, 0, 1) * width, y: clamp(p.y, 0, 1) * height })); }
+    function getPolygonBounding(poly) { const xs = poly.map((p) => p.x), ys = poly.map((p) => p.y); return { minX: Math.floor(Math.min(...xs)), minY: Math.floor(Math.min(...ys)), maxX: Math.ceil(Math.max(...xs)), maxY: Math.ceil(Math.max(...ys)) }; }
+
+    function warpPerspectiveToRect(sourceCanvas, quad) {
+      const [p0, p1, p2, p3] = quad;
+      const outW = Math.max(1, Math.round(Math.max(distance(p0, p1), distance(p3, p2))));
+      const outH = Math.max(1, Math.round(Math.max(distance(p0, p3), distance(p1, p2))));
+      const out = document.createElement('canvas');
+      out.width = outW;
+      out.height = outH;
+
+      const sctx = sourceCanvas.getContext('2d', { willReadFrequently: true });
+      const srcData = sctx.getImageData(0, 0, sourceCanvas.width, sourceCanvas.height);
+      const dctx = out.getContext('2d');
+      const dst = dctx.createImageData(outW, outH);
+
+      const sw = sourceCanvas.width;
+      const sh = sourceCanvas.height;
+      const sArr = srcData.data;
+      const dArr = dst.data;
+
+      function sample(x, y) {
+        const sx = clamp(x, 0, sw - 1), sy = clamp(y, 0, sh - 1);
+        const x0 = Math.floor(sx), y0 = Math.floor(sy);
+        const x1 = Math.min(sw - 1, x0 + 1), y1 = Math.min(sh - 1, y0 + 1);
+        const fx = sx - x0, fy = sy - y0;
+        const i00 = (y0 * sw + x0) * 4, i10 = (y0 * sw + x1) * 4, i01 = (y1 * sw + x0) * 4, i11 = (y1 * sw + x1) * 4;
+        const outPx = [0, 0, 0];
+        for (let c = 0; c < 3; c++) {
+          const v0 = sArr[i00 + c] + (sArr[i10 + c] - sArr[i00 + c]) * fx;
+          const v1 = sArr[i01 + c] + (sArr[i11 + c] - sArr[i01 + c]) * fx;
+          outPx[c] = Math.round(v0 + (v1 - v0) * fy);
+        }
+        return outPx;
+      }
+
+      for (let y = 0; y < outH; y++) {
+        const v = outH === 1 ? 0 : y / (outH - 1);
+        for (let x = 0; x < outW; x++) {
+          const u = outW === 1 ? 0 : x / (outW - 1);
+          const sx = (1 - u) * (1 - v) * p0.x + u * (1 - v) * p1.x + u * v * p2.x + (1 - u) * v * p3.x;
+          const sy = (1 - u) * (1 - v) * p0.y + u * (1 - v) * p1.y + u * v * p2.y + (1 - u) * v * p3.y;
+          const rgb = sample(sx, sy);
+          const di = (y * outW + x) * 4;
+          dArr[di] = rgb[0]; dArr[di + 1] = rgb[1]; dArr[di + 2] = rgb[2]; dArr[di + 3] = 255;
+        }
+      }
+
+      dctx.putImageData(dst, 0, 0);
+      return out;
+    }
+
+    function buildProcessedKey(page) {
+      const polyKey = page.edits.polygon.map((p) => `${p.x.toFixed(4)},${p.y.toFixed(4)}`).join('|');
+      return `${page.cache.displayKey}|${page.edits.perspective ? 1 : 0}|${polyKey}`;
+    }
+
+    function makeProcessedCanvas(page, useCache = true) {
+      const display = getDisplayCanvas(page);
+      const key = buildProcessedKey(page);
+      if (useCache && page.cache.processedCanvas && page.cache.processedKey === key) return page.cache.processedCanvas;
+
+      const poly = getPolygonPixels(page.edits.polygon, display.width, display.height);
+      let out;
+      if (page.edits.perspective) {
+        out = warpPerspectiveToRect(display, poly);
+      } else {
+        const box = getPolygonBounding(poly);
+        const width = Math.max(1, box.maxX - box.minX), height = Math.max(1, box.maxY - box.minY);
+        out = document.createElement('canvas'); out.width = width; out.height = height;
+        const ctx = out.getContext('2d');
+        ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, width, height);
+        ctx.beginPath();
+        poly.forEach((p, i) => { const x = p.x - box.minX, y = p.y - box.minY; if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); });
+        ctx.closePath(); ctx.clip();
+        ctx.drawImage(display, -box.minX, -box.minY);
+      }
+
+      page.cache.processedKey = key;
+      page.cache.processedCanvas = out;
+      return out;
+    }
+
+    function addImageElement(img, name) {
+      const canvas = document.createElement('canvas');
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      canvas.getContext('2d').drawImage(img, 0, 0);
+      const workingCanvas = downscaleCanvas(canvas, MAX_WORK_DIM);
+      const edits = defaultEdits();
+      edits.polygon = detectDocumentPolygon(workingCanvas);
+      pages.push({ name, originalCanvas: workingCanvas, edits, cache: createCache() });
+      selectedIndex = pages.length - 1;
+      syncControlsFromSelected();
+      renderPages();
+      schedulePreviewRender(true);
+    }
+
+    function addImageFile(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const img = new Image();
+          img.onload = () => { addImageElement(img, file.name || `page-${pages.length + 1}`); resolve(); };
+          img.onerror = () => reject(new Error('Không đọc được ảnh.'));
+          img.src = reader.result;
+        };
+        reader.onerror = () => reject(new Error('Không đọc được file.'));
+        reader.readAsDataURL(file);
+      });
+    }
+
+    function rotatePage(index) {
+      const page = pages[index];
+      const source = page.originalCanvas;
+      const out = document.createElement('canvas');
+      out.width = source.height;
+      out.height = source.width;
+      const ctx = out.getContext('2d');
+      ctx.translate(out.width / 2, out.height / 2);
+      ctx.rotate(Math.PI / 2);
+      ctx.drawImage(source, -source.width / 2, -source.height / 2);
+      page.originalCanvas = out;
+      page.edits.polygon = detectDocumentPolygon(out);
+      invalidateCache(page, true);
+      renderPages();
+      schedulePreviewRender(true);
+    }
+
+    function removePage(index) {
+      pages.splice(index, 1);
+      selectedIndex = pages.length ? Math.min(index, pages.length - 1) : -1;
+      syncControlsFromSelected();
+      renderPages();
+      schedulePreviewRender(true);
+    }
+
+    function clearAllPages() {
+      if (!pages.length) return;
+      pages.length = 0;
+      selectedIndex = -1;
+      renderPages();
+      schedulePreviewRender(true);
+    }
+
+    function movePage(index, direction) {
+      const next = index + direction;
+      if (next < 0 || next >= pages.length) return;
+      [pages[index], pages[next]] = [pages[next], pages[index]];
+      if (selectedIndex === index) selectedIndex = next;
+      else if (selectedIndex === next) selectedIndex = index;
+      renderPages();
+      schedulePreviewRender(true);
+    }
+
+    function selectPage(index) { selectedIndex = index; syncControlsFromSelected(); renderPages(); schedulePreviewRender(true); }
+
+    function renderPages() {
+      pagesEl.innerHTML = '';
+      emptyHint.classList.toggle('hidden', pages.length > 0);
+      editorWrap.classList.toggle('hidden', selectedIndex < 0);
+
+      pages.forEach((p, i) => {
+        const processed = makeProcessedCanvas(p, true);
+        const card = document.createElement('div'); card.className = 'card'; if (i === selectedIndex) card.style.borderColor = '#22c55e';
+        const wrap = document.createElement('div'); wrap.className = 'thumb-wrap';
+        const thumb = document.createElement('canvas');
+        const s = Math.min(200 / processed.width, 150 / processed.height);
+        thumb.width = Math.max(1, Math.floor(processed.width * s)); thumb.height = Math.max(1, Math.floor(processed.height * s));
+        thumb.getContext('2d').drawImage(processed, 0, 0, thumb.width, thumb.height);
+        wrap.appendChild(thumb);
+        const meta = document.createElement('div'); meta.className = 'meta'; meta.textContent = `Trang ${i + 1} • ${processed.width}×${processed.height}`;
+        const actions = document.createElement('div'); actions.className = 'actions';
+        const chooseBtn = document.createElement('button'); chooseBtn.textContent = 'Chọn'; chooseBtn.onclick = () => selectPage(i);
+        const upBtn = document.createElement('button'); upBtn.textContent = '↑ Lên'; upBtn.disabled = i === 0; upBtn.onclick = () => movePage(i, -1);
+        const downBtn = document.createElement('button'); downBtn.textContent = '↓ Xuống'; downBtn.disabled = i === pages.length - 1; downBtn.onclick = () => movePage(i, 1);
+        const rotateBtn = document.createElement('button'); rotateBtn.textContent = 'Xoay 90°'; rotateBtn.onclick = () => rotatePage(i);
+        const delBtn = document.createElement('button'); delBtn.textContent = 'Xóa'; delBtn.className = 'danger'; delBtn.onclick = () => removePage(i);
+        actions.append(chooseBtn, upBtn, downBtn, rotateBtn, delBtn);
+        card.append(wrap, meta, actions);
+        pagesEl.appendChild(card);
+      });
+    }
+
+    function syncControlsFromSelected() {
+      if (selectedIndex < 0 || !pages[selectedIndex]) return;
+      const e = pages[selectedIndex].edits;
+      controls.brightness.value = e.brightness;
+      controls.contrast.value = e.contrast;
+      controls.filter.value = e.filter;
+      controls.perspective.checked = e.perspective;
+      updateControlOutputs();
+    }
+
+    function updateControlOutputs() { outputs.brightness.textContent = `${controls.brightness.value}%`; outputs.contrast.textContent = `${controls.contrast.value}%`; }
+
+    function updateSelectedEditsFromControls() {
+      if (selectedIndex < 0 || !pages[selectedIndex]) return;
+      const selectedPage = pages[selectedIndex];
+      const brightness = Number(controls.brightness.value);
+      const contrast = Number(controls.contrast.value);
+      const filter = controls.filter.value;
+      const perspective = controls.perspective.checked;
+      const applyAll = controls.applyAll.checked;
+
+      const targets = applyAll ? pages : [selectedPage];
+      targets.forEach((page) => {
+        page.edits.brightness = brightness;
+        page.edits.contrast = contrast;
+        page.edits.filter = filter;
+        if (page === selectedPage) page.edits.perspective = perspective;
+        invalidateCache(page, true);
+      });
+
+      schedulePreviewRender(true);
+    }
+
+    function getCanvasPoint(event) {
+      const rect = previewCanvas.getBoundingClientRect();
+      return { x: (event.clientX - rect.left) * (previewCanvas.width / rect.width), y: (event.clientY - rect.top) * (previewCanvas.height / rect.height) };
+    }
+
+    function findVertexIndex(point, poly, w, h) {
+      const threshold = Math.max(16, Math.min(w, h) * 0.06);
+      let best = -1, bestDist = Infinity;
+      poly.forEach((v, i) => { const d = Math.hypot(point.x - v.x, point.y - v.y); if (d < bestDist) { bestDist = d; best = i; } });
+      return bestDist <= threshold ? best : -1;
+    }
+
+    function schedulePreviewRender(needsThumbRefresh = false) {
+      if (needsThumbRefresh) previewState.needThumbRefresh = true;
+      if (previewState.rafId) return;
+      previewState.rafId = requestAnimationFrame(() => {
+        previewState.rafId = 0;
+        renderPreview();
+        if (previewState.needThumbRefresh && !previewState.isDragging) {
+          previewState.needThumbRefresh = false;
+          renderPages();
+        }
+      });
+    }
+
+    function renderPreview() {
+      const p = pages[selectedIndex];
+      if (!p) {
+        const ctx = previewCanvas.getContext('2d');
+        previewCanvas.width = 1; previewCanvas.height = 1; ctx.clearRect(0, 0, 1, 1); selectedInfo.textContent = '';
+        return;
+      }
+
+      const display = getDisplayCanvas(p);
+      const scale = Math.min(820 / display.width, 420 / display.height, 1);
+      previewCanvas.width = Math.max(1, Math.floor(display.width * scale));
+      previewCanvas.height = Math.max(1, Math.floor(display.height * scale));
+      previewState.width = previewCanvas.width; previewState.height = previewCanvas.height;
+
+      const ctx = previewCanvas.getContext('2d');
+      ctx.clearRect(0, 0, previewCanvas.width, previewCanvas.height);
+      ctx.drawImage(display, 0, 0, previewCanvas.width, previewCanvas.height);
+
+      const poly = getPolygonPixels(p.edits.polygon, previewCanvas.width, previewCanvas.height);
+      ctx.save();
+      ctx.fillStyle = 'rgba(2, 6, 23, 0.55)';
+      ctx.beginPath(); ctx.rect(0, 0, previewCanvas.width, previewCanvas.height);
+      poly.forEach((pt, i) => { if (i === 0) ctx.moveTo(pt.x, pt.y); else ctx.lineTo(pt.x, pt.y); });
+      ctx.closePath(); ctx.fill('evenodd');
+      ctx.beginPath(); poly.forEach((pt, i) => { if (i === 0) ctx.moveTo(pt.x, pt.y); else ctx.lineTo(pt.x, pt.y); }); ctx.closePath();
+      ctx.strokeStyle = '#22c55e'; ctx.lineWidth = 2; ctx.stroke();
+      poly.forEach((pt, idx) => { ctx.fillStyle = '#22c55e'; ctx.fillRect(pt.x - 7, pt.y - 7, 14, 14); ctx.fillStyle = '#0b1220'; ctx.font = '10px sans-serif'; ctx.fillText(String(idx + 1), pt.x - 2, pt.y + 3); });
+      ctx.restore();
+
+      selectedInfo.textContent = `${p.name} • ${p.originalCanvas.width}x${p.originalCanvas.height}px (đã tối ưu nếu ảnh quá lớn) • Làm phẳng: ${p.edits.perspective ? 'Bật' : 'Tắt'}`;
+    }
+
+    async function openCamera() {
+      if (stream) return;
+      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false });
+      video.srcObject = stream; cameraBox.classList.remove('hidden'); captureBtn.classList.remove('hidden'); closeCamBtn.classList.remove('hidden');
+    }
+
+    function closeCamera() {
+      if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
+      video.srcObject = null; cameraBox.classList.add('hidden'); captureBtn.classList.add('hidden'); closeCamBtn.classList.add('hidden');
+    }
+
+    function captureFrame() {
+      if (!video.videoWidth || !video.videoHeight) return;
+      const canvas = document.createElement('canvas'); canvas.width = video.videoWidth; canvas.height = video.videoHeight; canvas.getContext('2d').drawImage(video, 0, 0);
+      const workingCanvas = downscaleCanvas(canvas, MAX_WORK_DIM);
+      const edits = defaultEdits();
+      edits.polygon = detectDocumentPolygon(workingCanvas);
+      pages.push({ name: `camera-${pages.length + 1}.jpg`, originalCanvas: workingCanvas, edits, cache: createCache() });
+      selectedIndex = pages.length - 1;
+      syncControlsFromSelected(); renderPages(); schedulePreviewRender(true);
+    }
+
+    uploadInput.addEventListener('change', async (e) => {
+      for (const file of [...(e.target.files || [])]) {
+        try { await addImageFile(file); } catch (err) { alert(err.message || 'Lỗi đọc ảnh'); }
+      }
+      uploadInput.value = '';
+    });
+
+    openCamBtn.addEventListener('click', async () => { try { await openCamera(); } catch { alert('Không mở được camera.'); } });
+    closeCamBtn.addEventListener('click', closeCamera);
+    captureBtn.addEventListener('click', captureFrame);
+    clearAllBtn.addEventListener('click', () => {
+      if (!pages.length) return;
+      if (confirm('Xóa toàn bộ ảnh đã thêm?')) clearAllPages();
+    });
+
+    for (const ctl of [controls.brightness, controls.contrast]) {
+      ctl.addEventListener('input', () => { updateControlOutputs(); updateSelectedEditsFromControls(); });
+    }
+    controls.filter.addEventListener('change', updateSelectedEditsFromControls);
+    controls.perspective.addEventListener('change', updateSelectedEditsFromControls);
+
+    previewCanvas.addEventListener('pointerdown', (event) => {
+      const p = pages[selectedIndex];
+      if (!p) return;
+      const point = getCanvasPoint(event);
+      const poly = getPolygonPixels(p.edits.polygon, previewState.width, previewState.height);
+      let hit = findVertexIndex(point, poly, previewState.width, previewState.height);
+      if (hit < 0) {
+        let min = Infinity;
+        poly.forEach((v, i) => { const d = Math.hypot(point.x - v.x, point.y - v.y); if (d < min) { min = d; hit = i; } });
+      }
+      previewState.activeVertex = hit;
+      previewState.isDragging = true;
+      previewCanvas.setPointerCapture(event.pointerId);
+      previewCanvas.style.cursor = 'grabbing';
+    });
+
+    previewCanvas.addEventListener('pointermove', (event) => {
+      const p = pages[selectedIndex];
+      if (!p) return;
+      const point = getCanvasPoint(event);
+      const poly = getPolygonPixels(p.edits.polygon, previewState.width, previewState.height);
+      if (!previewState.isDragging) {
+        previewCanvas.style.cursor = findVertexIndex(point, poly, previewState.width, previewState.height) >= 0 ? 'grab' : 'crosshair';
+        return;
+      }
+      const idx = previewState.activeVertex;
+      if (idx < 0) return;
+      p.edits.polygon[idx].x = clamp(point.x / previewState.width, 0, 1);
+      p.edits.polygon[idx].y = clamp(point.y / previewState.height, 0, 1);
+      invalidateCache(p, false);
+      schedulePreviewRender(false);
+    });
+
+    previewCanvas.addEventListener('pointerup', (event) => {
+      if (previewState.isDragging) previewCanvas.releasePointerCapture(event.pointerId);
+      previewState.activeVertex = -1;
+      previewState.isDragging = false;
+      previewCanvas.style.cursor = 'crosshair';
+      schedulePreviewRender(true);
+    });
+
+    previewCanvas.addEventListener('pointerleave', () => { if (!previewState.isDragging) previewCanvas.style.cursor = 'crosshair'; });
+
+    resetPolyBtn.addEventListener('click', () => {
+      const p = pages[selectedIndex];
+      if (!p) return;
+      p.edits.polygon = defaultPolygon();
+      invalidateCache(p, false);
+      schedulePreviewRender(true);
+    });
+
+    autoDetectBtn.addEventListener('click', () => {
+      const p = pages[selectedIndex];
+      if (!p) return;
+      p.edits.polygon = detectDocumentPolygon(p.originalCanvas);
+      invalidateCache(p, false);
+      schedulePreviewRender(true);
+    });
+
+    resetEditBtn.addEventListener('click', () => {
+      const p = pages[selectedIndex];
+      if (!p) return;
+      p.edits = defaultEdits();
+      invalidateCache(p, true);
+      syncControlsFromSelected();
+      schedulePreviewRender(true);
+    });
+
+    exportPdfBtn.addEventListener('click', () => {
+      if (!pages.length) return alert('Chưa có trang để xuất PDF.');
+      const processedPages = pages.map((p) => makeProcessedCanvas(p, false));
+      downloadBlob(createPdfFromCanvases(processedPages), `${getBaseFilename()}.pdf`);
+    });
+
+    exportJpgBtn.addEventListener('click', () => {
+      if (selectedIndex < 0) return alert('Hãy chọn 1 trang trước.');
+      makeProcessedCanvas(pages[selectedIndex], false).toBlob((blob) => { if (blob) downloadBlob(blob, `${getBaseFilename()}-page-${selectedIndex + 1}.jpg`); }, 'image/jpeg', 0.95);
+    });
+
+    exportPngBtn.addEventListener('click', () => {
+      if (selectedIndex < 0) return alert('Hãy chọn 1 trang trước.');
+      makeProcessedCanvas(pages[selectedIndex], false).toBlob((blob) => { if (blob) downloadBlob(blob, `${getBaseFilename()}-page-${selectedIndex + 1}.png`); }, 'image/png');
+    });
+
+    window.addEventListener('beforeunload', closeCamera);
+    updateControlOutputs();
+  </script>
+</body>
+</html>

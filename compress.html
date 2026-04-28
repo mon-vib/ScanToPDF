@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Nén PDF (Offline)</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background: #0f172a; color: #e2e8f0; }
+    .container { max-width: 900px; margin: 0 auto; padding: 16px; }
+    .panel { background: #111827; border: 1px solid #334155; border-radius: 12px; padding: 14px; margin-bottom: 12px; }
+    .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .field { display: flex; flex-direction: column; gap: 4px; min-width: 200px; }
+    .field label { font-size: 12px; color: #94a3b8; }
+    select, button, input[type="file"]::file-selector-button { border: 1px solid #475569; background: #1e293b; color: #e2e8f0; border-radius: 8px; padding: 8px 12px; cursor: pointer; font-size: 14px; }
+    button:hover, select:hover, input[type="file"]::file-selector-button:hover { background: #334155; }
+    .ok { border-color: #22c55e; color: #bbf7d0; }
+    .muted { color: #94a3b8; font-size: 13px; }
+    progress { width: 100%; height: 14px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="row" style="justify-content:space-between; margin-bottom:12px;">
+      <h1 style="margin:0;">🗜️ Nén PDF</h1>
+      <a href="index.html" style="text-decoration:none;"><button type="button">← Quay lại Scan</button></a>
+    </div>
+
+    <div class="panel">
+      <div class="row">
+        <input id="pdfInput" type="file" accept="application/pdf" />
+        <div class="field">
+          <label for="levelSelect">Mức nén</label>
+          <select id="levelSelect">
+            <option value="high">Nén cao (file nhỏ nhất)</option>
+            <option value="medium" selected>Cân bằng chất lượng</option>
+            <option value="low">Chất lượng cao (nén nhẹ)</option>
+          </select>
+        </div>
+        <button id="compressBtn" class="ok">Nén & tải xuống</button>
+      </div>
+      <p id="fileInfo" class="muted">Chưa chọn file PDF.</p>
+      <progress id="progressBar" value="0" max="100"></progress>
+      <p id="statusText" class="muted">Sẵn sàng.</p>
+    </div>
+  </div>
+
+  <script>
+    const pdfInput = document.getElementById('pdfInput');
+    const levelSelect = document.getElementById('levelSelect');
+    const compressBtn = document.getElementById('compressBtn');
+    const fileInfo = document.getElementById('fileInfo');
+    const statusText = document.getElementById('statusText');
+    const progressBar = document.getElementById('progressBar');
+
+    let selectedFile = null;
+    let pdfJsReady = false;
+
+    async function loadScript(src) {
+      return new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        s.src = src;
+        s.async = true;
+        s.onload = resolve;
+        s.onerror = reject;
+        document.head.appendChild(s);
+      });
+    }
+
+    async function ensurePdfJs() {
+      if (window.pdfjsLib) return true;
+      const cdnList = [
+        {
+          lib: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.8.69/pdf.min.js',
+          worker: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.8.69/pdf.worker.min.js',
+        },
+        {
+          lib: 'https://unpkg.com/pdfjs-dist@4.8.69/build/pdf.min.mjs',
+          worker: 'https://unpkg.com/pdfjs-dist@4.8.69/build/pdf.worker.min.mjs',
+          esm: true,
+        },
+      ];
+
+      for (const item of cdnList) {
+        try {
+          if (item.esm) {
+            const mod = await import(item.lib);
+            window.pdfjsLib = mod;
+          } else {
+            await loadScript(item.lib);
+          }
+          if (window.pdfjsLib) {
+            window.pdfjsLib.GlobalWorkerOptions.workerSrc = item.worker;
+            return true;
+          }
+        } catch (err) {
+          console.warn('Load PDF.js failed from', item.lib, err);
+        }
+      }
+      return false;
+    }
+
+    function formatBytes(bytes) {
+      if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+      const units = ['B', 'KB', 'MB', 'GB'];
+      const exp = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
+      return `${(bytes / (1024 ** exp)).toFixed(exp === 0 ? 0 : 2)} ${units[exp]}`;
+    }
+
+    function dataUrlToBytes(dataUrl) {
+      const b64 = dataUrl.split(',')[1];
+      const bin = atob(b64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      return bytes;
+    }
+    function asciiBytes(str) { return new TextEncoder().encode(str); }
+    function concatBytes(parts) {
+      const len = parts.reduce((n, p) => n + p.length, 0);
+      const out = new Uint8Array(len);
+      let off = 0;
+      for (const p of parts) { out.set(p, off); off += p.length; }
+      return out;
+    }
+
+    function createPdfFromCanvases(canvases, jpegQuality = 0.82) {
+      const pageW = 595.28;
+      const pageH = 841.89;
+      const objects = new Map();
+      let nextId = 3;
+      const pageRefs = [];
+
+      canvases.forEach((canvas) => {
+        const imgBytes = dataUrlToBytes(canvas.toDataURL('image/jpeg', jpegQuality));
+        const iw = canvas.width;
+        const ih = canvas.height;
+        const scale = Math.min(pageW / iw, pageH / ih);
+        const drawW = iw * scale;
+        const drawH = ih * scale;
+        const x = (pageW - drawW) / 2;
+        const y = (pageH - drawH) / 2;
+        const imgId = nextId++;
+        const contentId = nextId++;
+        const pageId = nextId++;
+
+        objects.set(imgId, concatBytes([asciiBytes(`<< /Type /XObject /Subtype /Image /Width ${iw} /Height ${ih} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${imgBytes.length} >>\nstream\n`), imgBytes, asciiBytes('\nendstream')]));
+        const contentStream = `q\n${drawW.toFixed(2)} 0 0 ${drawH.toFixed(2)} ${x.toFixed(2)} ${y.toFixed(2)} cm\n/Im0 Do\nQ`;
+        objects.set(contentId, asciiBytes(`<< /Length ${contentStream.length} >>\nstream\n${contentStream}\nendstream`));
+        objects.set(pageId, asciiBytes(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageW.toFixed(2)} ${pageH.toFixed(2)}] /Resources << /XObject << /Im0 ${imgId} 0 R >> >> /Contents ${contentId} 0 R >>`));
+        pageRefs.push(`${pageId} 0 R`);
+      });
+
+      objects.set(2, asciiBytes(`<< /Type /Pages /Kids [${pageRefs.join(' ')}] /Count ${pageRefs.length} >>`));
+      objects.set(1, asciiBytes('<< /Type /Catalog /Pages 2 0 R >>'));
+
+      const ids = Array.from(objects.keys()).sort((a, b) => a - b);
+      const parts = [asciiBytes('%PDF-1.4\n%\xE2\xE3\xCF\xD3\n')];
+      const offsets = [0];
+      let pos = parts[0].length;
+      ids.forEach((id) => {
+        offsets[id] = pos;
+        const head = asciiBytes(`${id} 0 obj\n`);
+        const body = objects.get(id);
+        const tail = asciiBytes('\nendobj\n');
+        parts.push(head, body, tail);
+        pos += head.length + body.length + tail.length;
+      });
+      const xrefStart = pos;
+      const size = ids[ids.length - 1] + 1;
+      let xref = `xref\n0 ${size}\n0000000000 65535 f \n`;
+      for (let i = 1; i < size; i++) xref += `${String(offsets[i] || 0).padStart(10, '0')} 00000 n \n`;
+      parts.push(asciiBytes(xref), asciiBytes(`trailer\n<< /Size ${size} /Root 1 0 R >>\nstartxref\n${xrefStart}\n%%EOF`));
+      return new Blob([concatBytes(parts)], { type: 'application/pdf' });
+    }
+
+    function getCompressionConfig(level) {
+      if (level === 'high') return { maxWidth: 1000, jpegQuality: 0.6 };
+      if (level === 'low') return { maxWidth: 1800, jpegQuality: 0.85 };
+      return { maxWidth: 1400, jpegQuality: 0.74 };
+    }
+
+    function downloadBlob(blob, filename) {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1200);
+    }
+
+    async function renderPdfToCanvases(file, config) {
+      const arr = await file.arrayBuffer();
+      const pdf = await window.pdfjsLib.getDocument({ data: arr }).promise;
+      const canvases = [];
+      for (let i = 1; i <= pdf.numPages; i++) {
+        statusText.textContent = `Đang xử lý trang ${i}/${pdf.numPages}...`;
+        progressBar.value = Math.round(((i - 1) / pdf.numPages) * 100);
+        const page = await pdf.getPage(i);
+        const baseViewport = page.getViewport({ scale: 1 });
+        const scale = Math.min(1, config.maxWidth / baseViewport.width);
+        const viewport = page.getViewport({ scale });
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.floor(viewport.width));
+        canvas.height = Math.max(1, Math.floor(viewport.height));
+        const ctx = canvas.getContext('2d', { alpha: false });
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        await page.render({ canvasContext: ctx, viewport }).promise;
+        canvases.push(canvas);
+      }
+      progressBar.value = 100;
+      return { canvases, pageCount: pdf.numPages };
+    }
+
+    pdfInput.addEventListener('change', (e) => {
+      selectedFile = (e.target.files || [])[0] || null;
+      progressBar.value = 0;
+      if (!selectedFile) {
+        fileInfo.textContent = 'Chưa chọn file PDF.';
+        statusText.textContent = 'Sẵn sàng.';
+        return;
+      }
+      fileInfo.textContent = `Đã chọn: ${selectedFile.name} • ${formatBytes(selectedFile.size)}`;
+      statusText.textContent = 'Sẵn sàng để nén.';
+    });
+
+    compressBtn.addEventListener('click', async () => {
+      if (!pdfJsReady) {
+        const readyNow = await ensurePdfJs();
+        pdfJsReady = readyNow;
+      }
+      if (!pdfJsReady) {
+        statusText.textContent = 'Không tải được PDF.js. Hãy kiểm tra mạng hoặc mở qua http://localhost.';
+        return alert('Không tải được thư viện PDF.js. Vui lòng bật internet hoặc chạy trang qua local server.');
+      }
+      if (!selectedFile) return alert('Vui lòng chọn file PDF trước.');
+      compressBtn.disabled = true;
+      try {
+        const config = getCompressionConfig(levelSelect.value);
+        statusText.textContent = 'Đang mở file PDF...';
+        const { canvases, pageCount } = await renderPdfToCanvases(selectedFile, config);
+        statusText.textContent = 'Đang đóng gói PDF mới...';
+        const blob = createPdfFromCanvases(canvases, config.jpegQuality);
+        const reduced = selectedFile.size > 0 ? ((1 - (blob.size / selectedFile.size)) * 100) : 0;
+        const safeReduced = Number.isFinite(reduced) ? reduced : 0;
+        const outputName = selectedFile.name.toLowerCase().endsWith('.pdf')
+          ? `${selectedFile.name.slice(0, -4)}-compressed.pdf`
+          : `${selectedFile.name}-compressed.pdf`;
+        downloadBlob(blob, outputName);
+        statusText.textContent = `Hoàn tất ${pageCount} trang. Gốc: ${formatBytes(selectedFile.size)} • Sau nén: ${formatBytes(blob.size)} • Giảm: ${safeReduced.toFixed(1)}%`;
+      } catch (err) {
+        console.error(err);
+        statusText.textContent = 'Nén thất bại.';
+        alert('Không thể nén PDF. File có thể bị lỗi hoặc không tương thích.');
+      } finally {
+        compressBtn.disabled = false;
+      }
+    });
+
+    (async () => {
+      statusText.textContent = 'Đang tải công cụ nén PDF...';
+      pdfJsReady = await ensurePdfJs();
+      if (pdfJsReady) {
+        statusText.textContent = 'Sẵn sàng.';
+      } else {
+        statusText.textContent = 'Không tải được PDF.js. Nếu mở file trực tiếp, hãy thử chạy local server: python3 -m http.server 8080';
+      }
+    })();
+  </script>
+</body>
+</html>
